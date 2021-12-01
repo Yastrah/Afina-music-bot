@@ -1,0 +1,4 @@
+async-timeout==3.0.1
+discord.py==1.7.3
+requests==2.25.1
+youtube-dl==2021.6.6

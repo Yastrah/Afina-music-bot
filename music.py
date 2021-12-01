@@ -1,0 +1,781 @@
+import discord
+from discord.ext import commands
+import youtube_dl
+import asyncio
+import json
+
+
+class Player(commands.Cog):
+    def __init__(self, client):
+        self.client = client
+
+    async def check_queue(self, ctx):  # проверка на наличие песен в очереди. Если есть то отправляет запрос в play_song
+        print('check_queue')
+        file = open('Db.json', 'r')  # получение данных из Bd->
+        data = json.loads(file.read())
+        file.close()
+        settings = data[str(ctx.message.guild.id)]  # settings содержит все настройки для этого сервера
+
+        if settings['repeat']:
+            settings['queue'].append(settings['queue'][0])
+            settings['queue'].pop(0)
+            ctx.voice_client.stop()
+            await self.play_song(ctx, settings['queue'][0])
+        else:
+            if len(settings['queue']) > 0:
+                ctx.voice_client.stop()
+                settings['queue'].pop(0)
+            if len(settings['queue']) > 0:
+                await self.play_song(ctx, settings['queue'][0])
+
+        data[str(ctx.message.guild.id)] = settings  # Запись новых данных в Bd->
+        file = open('Db.json', 'w')
+        json.dump(data, file)
+        file.close()
+
+    async def search_song(self, amount, song):  # поиск одной песни для немедленного проигрывания
+        print('search_song')
+        ydl_opts = {'format': 'bestaudio', 'queue': 'True', 'simulate': 'True', 'preferredquality': '192',
+                    'preferredcodec': 'mp3', 'key': 'FFmpegExtractAudio'}
+        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f'ytsearch{amount}:{song}', download=False, ie_key='YoutubeSearch')
+        if len(info['entries']) == 0:
+            return None
+
+        return info
+
+    async def play_song(self, ctx, song):  # непосредственно проигрывание песни с готовым url
+        print('play_song')
+        print(song)
+        ydl_opts = {'format': 'bestaudio', 'queue': 'True', 'simulate': 'True', 'preferredquality': '192',
+                    'preferredcodec': 'mp3', 'key': 'FFmpegExtractAudio'}
+        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(song, download=False)
+
+        url = info['formats'][0]['url']
+        source = discord.FFmpegPCMAudio(url)
+
+        ctx.voice_client.play(source, after=lambda error: self.client.loop.create_task(self.check_queue(ctx)))
+        ctx.voice_client.source.volume = 0.7
+
+    @commands.command(aliases=['p'])
+    async def play(self, ctx, *, song=None):  # play->
+        print('play')
+
+        if ctx.voice_client.is_paused():
+            ctx.voice_client.resume()
+
+        if song is None:
+            return await ctx.send('*Вы должны указать песню!*')
+
+        file = open('Db.json', 'r')  # получение данных из Bd->
+        data = json.loads(file.read())
+        file.close()
+        settings = data[str(ctx.message.guild.id)]  # settings содержит все настройки для этого сервера
+
+        if song.split()[0].lower() in ['list', 'playlist', 'l', 'pl']:  # проигрывание плейлиста
+            print('playlist')
+            await ctx.message.delete()  # удаление команды
+
+            if song.split()[1].lower() in list(settings['playlists']):
+                settings['queue'] = settings['playlists'][song.split()[1].lower()]
+
+                if ctx.voice_client.source is not None:
+                    ctx.voice_client.stop()
+                    await self.play_song(ctx, settings['queue'][0])
+                else:
+                    await self.play_song(ctx, settings['queue'][0])
+
+                data[str(ctx.message.guild.id)] = settings  # Запись новых данных в Bd->
+                file = open('Db.json', 'w')
+                json.dump(data, file)
+                file.close()
+
+                return await ctx.send(f'*Играет плейлист **{song.split()[1].lower()}** * ')
+            else:
+                return await ctx.send(f'*Плейлист **{song.split()[1].lower()}** __не найден__ ❌* ')
+
+        if not ('youtube.com/watch?' in song or 'https://youtu.be/' in song):  # поиск песни если это не url
+            print('searching')
+            msg = await ctx.send('Поик песни...')
+
+            info = await self.search_song(1, song)
+            await msg.delete()  # Удаление сообщения 'поиск песни...'
+
+            if info is None:
+                return await ctx.send('*Не удалось найти песню...*')
+            song = info['entries'][0]['webpage_url']
+            await ctx.send(song)
+
+        if ctx.voice_client.source is not None:
+            if song in settings['queue']:
+                return await ctx.send('*Эта песня уже добавлена в очередь!*')
+            else:
+                if len(settings['queue']) < 30:
+                    settings['queue'].append(song)
+                    data[str(ctx.message.guild.id)] = settings  # Запись новых данных в Bd->
+                    file = open('Db.json', 'w')
+                    json.dump(data, file)
+                    file.close()
+                    return await ctx.send('*песня добавлена в очередь*')
+                else:
+                    return await ctx.send('*Уже добавлено слишком монго песен!*')
+
+        settings['queue'].append(song)
+
+        data[str(ctx.message.guild.id)] = settings  # Запись новых данных в Bd->
+        file = open('Db.json', 'w')
+        json.dump(data, file)
+        file.close()
+
+        await self.play_song(ctx, song)
+        # await ctx.send(f'Сейчас играет: ***{name}***')
+
+    @play.before_invoke
+    async def connect_voice(self, ctx):  # вызывается перед вызовом play
+        if discord.utils.get(ctx.author.roles, name='muted'):
+            await ctx.send('*❌ Вам запрещено использовать эту команду!*')
+            raise commands.CommandError("Author is muted.")
+
+        if ctx.voice_client is None:
+            if ctx.author.voice:
+                await ctx.author.voice.channel.connect()
+            else:
+                await ctx.send("Вы не подключены к голосовому каналу")
+                raise commands.CommandError("Author not connected to a voice channel.")
+
+    @commands.command(aliases=['find'])
+    async def search(self, ctx, *, song=None):  # поиск песен по названию (5 вариантов)
+        await ctx.message.delete()  # удаление команды
+        if discord.utils.get(ctx.author.roles, name='muted'):
+            return await ctx.send('*❌ Вам запрещено использовать эту команду!*')
+
+        if song is None:
+            return await ctx.send('Вы должны указать песню!')
+
+        wait = await ctx.send(f'поиск `{song}`')
+
+        info = await self.search_song(5, song)
+        if info is None:
+            return await ctx.send('Не удалось найти песни')
+
+        result = f'**Пожалуйста, выберите трек отправив число от 1 до 5:**\n'
+        amount = 0
+        urls = []
+        for entry in info['entries']:
+            amount += 1
+            urls.append(entry['webpage_url'])
+
+            seconds = entry['duration']
+            hour = seconds // 3600
+            seconds %= 3600
+            minutes = seconds // 60
+            seconds %= 60
+            if hour > 0:
+                duration = "%dч %02dм %02dс" % (hour, minutes, seconds)
+            elif minutes > 0:
+                duration = "%02dм %02dс" % (minutes, seconds)
+            else:
+                duration = "%02dс" % seconds
+
+            result += f"**{amount}:** {entry['title']}\n({duration})\n"
+
+        await wait.delete()
+        await ctx.send(result)
+
+        try:
+            confirm = await self.client.wait_for("message", check=lambda m: m.author == ctx.author and m.channel == ctx.channel, timeout=15)
+        except asyncio.TimeoutError:
+            return
+
+        file = open('Db.json', 'r')  # получение данных из Bd->
+        data = json.loads(file.read())
+        file.close()
+        settings = data[str(ctx.message.guild.id)]  # settings содержит все настройки для этого сервера
+
+        if confirm.content == '1':
+            settings['queue'].append(urls[0])
+
+            data[str(ctx.message.guild.id)] = settings  # Запись новых данных в Bd->
+            file = open('Db.json', 'w')
+            json.dump(data, file)
+            file.close()
+
+            await confirm.delete()
+            await ctx.send(f'**Вы выбрали трек {confirm.content}:** {urls[0]}')
+            await self.connect_voice(ctx)
+            await self.play_song(ctx, urls[0])
+
+        elif confirm.content == '2':
+            settings['queue'].append(urls[1])
+
+            data[str(ctx.message.guild.id)] = settings  # Запись новых данных в Bd->
+            file = open('Db.json', 'w')
+            json.dump(data, file)
+            file.close()
+
+            await confirm.delete()
+            await ctx.send(f'**Вы выбрали трек {confirm.content}:** {urls[1]}')
+            await self.connect_voice(ctx)
+            await self.play_song(ctx, urls[1])
+
+        elif confirm.content == '3':
+            settings['queue'].append(urls[2])
+
+            data[str(ctx.message.guild.id)] = settings  # Запись новых данных в Bd->
+            file = open('Db.json', 'w')
+            json.dump(data, file)
+            file.close()
+
+            await confirm.delete()
+            await ctx.send(f'**Вы выбрали трек {confirm.content}:** {urls[2]}')
+            await self.connect_voice(ctx)
+            await self.play_song(ctx, urls[2])
+
+        elif confirm.content == '4':
+            settings['queue'].append(urls[3])
+
+            data[str(ctx.message.guild.id)] = settings  # Запись новых данных в Bd->
+            file = open('Db.json', 'w')
+            json.dump(data, file)
+            file.close()
+
+            await confirm.delete()
+            await ctx.send(f'**Вы выбрали трек {confirm.content}:** {urls[3]}')
+            await self.connect_voice(ctx)
+            await self.play_song(ctx, urls[3])
+
+        elif confirm.content == '5':
+            settings['queue'].append(urls[4])
+
+            data[str(ctx.message.guild.id)] = settings  # Запись новых данных в Bd->
+            file = open('Db.json', 'w')
+            json.dump(data, file)
+            file.close()
+
+            await confirm.delete()
+            await ctx.send(f'**Вы выбрали трек {confirm.content}:** {urls[4]}')
+            await self.connect_voice(ctx)
+            await self.play_song(ctx, urls[4])
+
+        else:
+            await confirm.delete()
+            return await ctx.send('**Вы ввели недопустимое значение!**')
+
+    @commands.command(aliases=['q'])
+    async def queue(self, ctx):  # отобразить очередь->
+        await ctx.message.delete()  # удаление команды
+        if discord.utils.get(ctx.author.roles, name='muted'):
+            return await ctx.send('*❌ Вам запрещено использовать эту команду!*')
+
+        if ctx.voice_client is None:
+            return await ctx.send('*Я не нахожусь в голосовом канале!*')
+
+        if ctx.author.voice is None:
+            return await ctx.send('*Вы не в голосовом кнале!*')
+
+        if ctx.author.voice.channel.id != ctx.voice_client.channel.id:
+            return await ctx.send('*Вы не находитесь со мной в одном голосовом канале!*')
+
+        file = open('Db.json', 'r')  # получение данных из Bd->
+        data = json.loads(file.read())
+        file.close()
+        settings = data[str(ctx.message.guild.id)]  # settings содержит все настройки для этого сервера
+
+        if len(settings['queue']) == 0:
+            return await ctx.send('**Очередь треков пуста**')
+
+        ydl_opts = {'format': 'bestaudio', 'queue': 'True', 'simulate': 'True', 'preferredquality': '192',
+                    'preferredcodec': 'mp3', 'key': 'FFmpegExtractAudio'}
+
+        queue_list = '**----Очередь треков----**\n'
+
+        #await ctx.send(f'**--Очередь треков:**')
+        count = 0
+        for song in settings['queue']:
+            with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(song, download=False)
+            # print(info['title'])
+            count += 1
+            #await ctx.send(f"**{count}:** {info['title']}")
+            queue_list += f"**{count}:** {info['title']}\n"
+        queue_list += '**----------------------------**'
+        await ctx.send(queue_list)
+
+    @commands.command(aliases=['s'])
+    async def skip(self, ctx):  # пропуск текущего трека->
+        print('skip')
+        await ctx.message.delete()  # удаление команды
+        if discord.utils.get(ctx.author.roles, name='muted'):
+            return await ctx.send('*❌ Вам запрещено использовать эту команду!*')
+
+        if ctx.voice_client is None:
+            return await ctx.send('*Я не нахожусь в голосовом канале!*')
+
+        if ctx.author.voice is None:
+            return await ctx.send('*Вы не в голосовом кнале!*')
+
+        if ctx.author.voice.channel.id != ctx.voice_client.channel.id:
+            return await ctx.send('*Вы не находитесь со мной в одном голосовом канале!*')
+
+        file = open('Db.json', 'r')  # получение данных из Bd->
+        data = json.loads(file.read())
+        file.close()
+        settings = data[str(ctx.message.guild.id)]  # settings содержит все настройки для этого сервера
+
+        if settings['vote_to_skip']:  # если голосование включено
+            embed = discord.Embed(title=f'Голосование __пропустить__ текущий трек',
+                                  description='**50% голосов позволит пропустить текущий трек**',
+                                  color=discord.Color.blue())
+            embed.set_author(name=ctx.author, icon_url=ctx.author.avatar_url)
+            embed.add_field(name='Пропустить', value=':white_check_mark:')
+            embed.add_field(name='Оставить', value=':no_entry_sign:')
+            embed.set_footer(text='Голосование завершится через 15 секунд!')
+
+            poll = await ctx.send(embed=embed)
+
+            await poll.add_reaction(u'\u2705')
+            await poll.add_reaction(u'\U0001F6AB')
+
+            await asyncio.sleep(15)  # 15 секунд ожидание
+            poll = await ctx.channel.fetch_message(poll.id)
+
+            votes = {u'\u2705': 0, u'\U0001F6AB': 0}
+            reacted = []
+
+            for reaction in poll.reactions:
+                if reaction.emoji in [u'\u2705', u'\U0001F6AB']:
+                    async for user in reaction.users():
+                        if ctx.author.voice.channel.id == ctx.voice_client.channel.id and user.id not in reacted and not user.bot:
+                            votes[reaction.emoji] += 1
+                            reacted.append(user.id)
+            skip = False
+
+            if votes[u'\u2705'] > 0:
+                if votes[u'\U0001F6AB'] == 0 or votes[u'\u2705'] / (votes[u'\u2705'] + votes[u'\U0001F6AB']) > 0.49:  # 50% или больше
+                    skip = True
+                    embed = discord.Embed(title='Пропуск __подтверждён__',
+                                          description=' ***Трек был пропущен голосованием***',
+                                          color=discord.Color.green())
+
+            if not skip:
+                embed = discord.Embed(title='Пропуск __отменён__',
+                                      description=' *Трек не был пропущен голосованием*\n***Текущий трек будет оставлен***',
+                                      color=discord.Color.red())
+
+            await poll.clear_reactions()
+            await poll.edit(embed=embed)
+
+            if skip:
+                ctx.voice_client.stop()
+
+        else:  # если голосование отключено
+            await ctx.send(f'*Текущий трек был **пропущен** ⏩ {ctx.author}*')
+            ctx.voice_client.stop()
+            # await self.check_queue(ctx)
+
+    @commands.command(aliases=['pl'])
+    async def playlists(self, ctx, type=None, name=None, *, value=None):
+        await ctx.message.delete()  # удаление команды
+        if discord.utils.get(ctx.author.roles, name='muted'):
+            return await ctx.send('*❌ Вам запрещено использовать эту команду!*')
+
+        file = open('Db.json', 'r')  # получение данных из Bd->
+        data = json.loads(file.read())
+        file.close()
+        settings = data[str(ctx.message.guild.id)]  # settings содержит все настройки для этого сервера
+
+        if type is None:
+            if len(list(settings['playlists'])) == 0:
+                return await ctx.send('*Ни одного плейлиста пока не создано!\n '
+                                      'Для того чтобы создать плейлист используйте команду:*\n '
+                                      '**.playlists create «название(одно слово)» «несколько url»**')
+
+            lists = '**----Список плейлистов----**\n'
+            for playlist in list(settings['playlists']):
+                lists += f'**{playlist}**\n'
+            lists += '**----------------------------------**'
+            return await ctx.send(lists)
+
+        if type.lower() in ['create', 'new']:
+            if value is None or name is None:
+                return await ctx.send('*Вы ввели не все аргументы!*')
+
+            if ('youtube.com/watch?' in name.lower() or 'https://youtu.be/' in name.lower()):
+                return await ctx.send('*Недопустимое имя плейлиста!*')
+
+            if name.lower() in list(settings['playlists']):
+                return await ctx.send('**Плейлист с таким именем уже существует!**')
+
+            settings['playlists'][name.lower()] = value.split()
+
+            data[str(ctx.message.guild.id)] = settings  # Запись новых данных в Bd->
+            file = open('Db.json', 'w')
+            json.dump(data, file)
+            file.close()
+            return await ctx.send(f'*Плейлист **{name}** успешно **создан**\n'
+                                  f'Удалить плейлист можно командой:*\n'
+                                  f'**.playlists delete «название»**')
+
+        if type.lower() in ['delete', 'del', 'remove']:
+            if name is None:
+                return await ctx.send(f'**Вы не ввели имя плейлиста!**')
+
+            if not name.lower() in list(settings['playlists']):
+                return await ctx.send('**Плейлиста с таким именем не существует!**')
+
+            del settings['playlists'][name.lower()]
+
+            data[str(ctx.message.guild.id)] = settings  # Запись новых данных в Bd->
+            file = open('Db.json', 'w')
+            json.dump(data, file)
+            file.close()
+            return await ctx.send(f'*Плейлист **{name}** успешно **удален** *')
+
+        if type.lower() in ['add']:
+            if name is None:
+                return await ctx.send(f'**Вы не ввели имя плейлиста!**')
+
+            if value is None:
+                return await ctx.send(f'**Вы не ввели url для добавления!**')
+
+            if not name.lower() in list(settings['playlists']):
+                return await ctx.send('**Плейлиста с таким именем не существует!**')
+
+            settings['playlists'][name.lower()].extend(value.split())
+
+            data[str(ctx.message.guild.id)] = settings  # Запись новых данных в Bd->
+            file = open('Db.json', 'w')
+            json.dump(data, file)
+            file.close()
+            return await ctx.send(f'*Плейлист **{name}** успешно* **расширен**')
+
+        return await ctx.send(f'**Такого параметра __playlists__ не существует!**')
+
+    @commands.command(aliases=['st'])
+    async def stop(self, ctx):  # очистка queue и отключение->
+        await ctx.message.delete()  # удаление команды
+        if discord.utils.get(ctx.author.roles, name='muted'):
+            return await ctx.send('*❌ Вам запрещено использовать эту команду!*')
+
+        if ctx.voice_client is None:
+            return await ctx.send('*Я не нахожусь в голосовом канале!*')
+
+        if ctx.author.voice is None:
+            return await ctx.send('*Вы не в голосовом кнале!*')
+
+        if ctx.author.voice.channel.id != ctx.voice_client.channel.id:
+            return await ctx.send('*Вы не находитесь со мной в одном голосовом канале!*')
+
+        file = open('Db.json', 'r')  # получение данных из Bd->
+        data = json.loads(file.read())
+        file.close()
+        settings = data[str(ctx.message.guild.id)]  # settings содержит все настройки для этого сервера
+
+        settings['queue'] = []
+        settings['repeat'] = False
+
+        data[str(ctx.message.guild.id)] = settings  # Запись новых данных в Bd->
+        file = open('Db.json', 'w')
+        json.dump(data, file)
+        file.close()
+
+        return await ctx.voice_client.disconnect()
+
+    @commands.command(aliases=['rep'])
+    async def repeat(self, ctx):  # очистка queue и отключение->
+        await ctx.message.delete()  # удаление команды
+        if discord.utils.get(ctx.author.roles, name='muted'):
+            return await ctx.send('*❌ Вам запрещено использовать эту команду!*')
+
+        if ctx.voice_client is None:
+            return await ctx.send('*Я не нахожусь в голосовом канале!*')
+
+        if ctx.author.voice is None:
+            return await ctx.send('*Вы не в голосовом кнале!*')
+
+        if ctx.author.voice.channel.id != ctx.voice_client.channel.id:
+            return await ctx.send('*Вы не находитесь со мной в одном голосовом канале!*')
+
+        file = open('Db.json', 'r')  # получение данных из Bd->
+        data = json.loads(file.read())
+        file.close()
+        settings = data[str(ctx.message.guild.id)]  # settings содержит все настройки для этого сервера
+
+        if settings['repeat']:
+            return await ctx.send('*Текущая очередь уже **повторяется** 🔁*')
+
+        settings['repeat'] = True
+
+        data[str(ctx.message.guild.id)] = settings  # Запись новых данных в Bd->
+        file = open('Db.json', 'w')
+        json.dump(data, file)
+        file.close()
+
+        await ctx.send('*Текущая очередь будет **повторяться** 🔁*')
+
+    @commands.command(aliases=['unrep'])
+    async def unrepeat(self, ctx):  # очистка queue и отключение->
+        await ctx.message.delete()  # удаление команды
+        if discord.utils.get(ctx.author.roles, name='muted'):
+            return await ctx.send('*❌ Вам запрещено использовать эту команду!*')
+
+        if ctx.voice_client is None:
+            return await ctx.send('*Я не нахожусь в голосовом канале!*')
+
+        if ctx.author.voice is None:
+            return await ctx.send('*Вы не в голосовом кнале!*')
+
+        if ctx.author.voice.channel.id != ctx.voice_client.channel.id:
+            return await ctx.send('*Вы не находитесь со мной в одном голосовом канале!*')
+
+        file = open('Db.json', 'r')  # получение данных из Bd->
+        data = json.loads(file.read())
+        file.close()
+        settings = data[str(ctx.message.guild.id)]  # settings содержит все настройки для этого сервера
+
+        if not settings['repeat']:
+            return await ctx.send('*Текущая очередь уже **не повторялась** *')
+
+        settings['repeat'] = False
+
+        data[str(ctx.message.guild.id)] = settings  # Запись новых данных в Bd->
+        file = open('Db.json', 'w')
+        json.dump(data, file)
+        file.close()
+
+        await ctx.send('*Текущая очередь будет **повторяться** 🔁*')
+
+    @commands.command()
+    async def pause(self, ctx):  # пауза->
+        await ctx.message.delete()  # удаление команды
+        if discord.utils.get(ctx.author.roles, name='muted'):
+            return await ctx.send('*❌ Вам запрещено использовать эту команду!*')
+
+        if ctx.voice_client is None:
+            return await ctx.send('*Я не нахожусь в голосовом канале!*')
+
+        if ctx.author.voice is None:
+            return await ctx.send('*Вы не в голосовом кнале!*')
+
+        if ctx.author.voice.channel.id != ctx.voice_client.channel.id:
+            return await ctx.send('*Вы не находитесь со мной в одном голосовом канале!*')
+
+        if not ctx.voice_client.is_paused():
+            print('pause')
+            await ctx.send('*пауза* ⏸')
+            ctx.voice_client.pause()
+
+        time = 0  # если бот стоит на паузе больше 10 мин то он покидает голосовой канал и чистит очередь
+        while ctx.voice_client.is_paused():  # Checks if voice is playing
+            await asyncio.sleep(1)
+            time += 1
+            if time > 600:  # 10 мин
+                file = open('Db.json', 'r')
+                data = json.loads(file.read())
+                file.close()
+                data[str(ctx.message.guild.id)]['queue'] = []
+                data[str(ctx.message.guild.id)]['repeat'] = False
+                file = open('Db.json', 'w')
+                json.dump(data, file)
+
+                print('auto-leave')
+                await ctx.send('**Бот слишком долго стоял на паузе. Очередь была очищена**')
+                return await ctx.voice_client.disconnect()
+
+    @commands.command()
+    async def resume(self, ctx):  # продолжить->
+        await ctx.message.delete()  # удаление команды
+        if discord.utils.get(ctx.author.roles, name='muted'):
+            return await ctx.send('*❌ Вам запрещено использовать эту команду!*')
+
+        if ctx.voice_client is None:
+            return await ctx.send('*Я не нахожусь в голосовом канале!*')
+
+        if ctx.author.voice is None:
+            return await ctx.send('*Вы не в голосовом кнале!*')
+
+        if ctx.author.voice.channel.id != ctx.voice_client.channel.id:
+            return await ctx.send('*Вы не находитесь со мной в одном голосовом канале!*')
+
+        if ctx.voice_client.is_paused():
+            print('resume')
+            await ctx.send('*Продолжить* ▶')
+            ctx.voice_client.resume()
+
+    @commands.command()
+    async def join(self, ctx):  # присоединение к голосовому каналу->
+        await ctx.message.delete()  # удаление команды
+        if ctx.author.voice is None:
+            return await ctx.send('*Вы не подключены к голосовому каналу!*')
+        else:
+            channel = ctx.author.voice.channel
+            if ctx.voice_client is None:
+                print('connect')
+                return await channel.connect()
+            else:
+                print('move')
+                return await ctx.voice_client.move_to(channel)
+
+    @commands.command()
+    async def leave(self, ctx):  # отключение от голосового канала->
+        await ctx.message.delete()  # удаление команды
+        if ctx.voice_client is not None:
+            file = open('Db.json', 'r')
+            data = json.loads(file.read())
+            file.close()
+            data[str(ctx.message.guild.id)]['queue'] = []
+            file = open('Db.json', 'w')
+            json.dump(data, file)
+
+            print('leave')
+            return await ctx.voice_client.disconnect()
+
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member, before, after):  # вызывается при подключении\отключении от голосового канала
+        if member == self.client.user or before.channel is None:
+            return
+
+        if self.client.user in before.channel.members:
+            count = 0
+            for user in before.channel.members:
+                if not user.bot:
+                    count += 1
+
+            if count == 0:
+                for voice in self.client.voice_clients:
+                    if voice.channel.id == before.channel.id:
+                        if voice.is_paused():
+                            return
+                        print('auto-pause')
+                        voice.pause()
+
+                        time = 0  # если бот стоит на паузе больше 5 мин то он покидает голосовой канал и чистит очередь
+                        while voice.is_paused():  # Checks if voice is playing
+                            await asyncio.sleep(1)
+                            time += 1
+                            if time > 300:  # 5 мин
+                                file = open('Db.json', 'r')
+                                data = json.loads(file.read())
+                                file.close()
+                                data[str(voice.guild.id)]['queue'] = []
+                                data[str(voice.guild.id)]['repeat'] = False
+                                file = open('Db.json', 'w')
+                                json.dump(data, file)
+
+                                print('auto-leave')
+                                return await voice.disconnect()
+
+
+
+
+# # play->
+# @commands.command()
+# async def play(self, ctx, url=None):
+#     # #получение данных из Bd->
+#     # file = open('Db.json', 'r')
+#     # DATA = json.loads(file.read())
+#     # # if not ctx.message.guild in data:# если сервер не добавлен->
+#     # #     data[ctx.message.guild] = {'list': [], 'language': 'ru'}
+#     # data = DATA[str(ctx.message.guild)]
+#     # file.close()
+#     print('play')
+#     ydl_opts = {'format': 'worstaudio/best', 'noplaylist': 'True', 'simulate': 'True', 'preferredquality': '192', 'preferredcodec': 'mp3', 'key': 'FFmpegExtractAudio'}
+#     ffmpeg_opts = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 'options': '-vn'}
+#
+#     vc = ctx.voice_client
+#
+#     with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+#         info = ydl.extract_info(url, download=False)
+#
+#     URL = info['formats'][0]['url']
+#     source = discord.FFmpegPCMAudio(executable="C:\\Programming\\ffmpeg\\bin\\ffmpeg.exe", source=URL, **ffmpeg_opts)
+#     vc.play(source)
+
+
+# @play.before_invoke # вызывается перед вызовом play
+# async def ensure_voice(self, ctx):
+#     print('invoke')
+#     if ctx.voice_client is None:
+#         if ctx.author.voice:
+#             await ctx.author.voice.channel.connect()
+#         else:
+#             await ctx.send("You are not connected to a voice channel.")
+#             raise commands.CommandError("Author not connected to a voice channel.")
+#     elif ctx.voice_client.is_playing():
+#         ctx.voice_client.stop()
+
+# # присоединение к голосовому каналу->
+#     @commands.command()
+#     async def join(self, ctx):
+#         await ctx.channel.purge(limit=1)  # удаление команды
+#
+#         if ctx.author.voice is None:
+#             await ctx.send('Вы не подключены к голосовому каналу!')
+#             print('Вы не подключены к голосовому каналу!')
+#         else:
+#             channel = ctx.author.voice.channel
+#             if ctx.voice_client is None:
+#                 await channel.connect()
+#                 print('connect')
+#             else:
+#                 await ctx.voice_client.move_to(channel)
+#                 print('move')
+#
+#
+#     # отключение от голосового канала->
+#     @commands.command()
+#     async def leave(self, ctx):
+#         await ctx.channel.purge(limit=1)  # удаление команды
+#
+#         if ctx.voice_client is not None:
+#             await ctx.voice_client.disconnect()
+#             print('leave')
+#
+#             file = open('Bd.json', 'r')
+#             data = json.loads(file.read())
+#             file.close()
+#             data[str(ctx.message.guild)]['list'] = []
+#             file = open('Bd.json', 'w')
+#             json.dump(data, file)
+#
+#
+#     # play->
+#     @commands.command()
+#     async def play(self, ctx, url=None):
+#         print('play')
+#
+#
+#
+#
+#
+#     @commands.command()
+#     async def skip(self, ctx):
+#         pass
+#
+#
+#     #stop (очистка list и отключение) ->
+#     @commands.command()
+#     async def stop(self, ctx):
+#         pass
+#
+#
+#     # pause->
+#     @commands.command()
+#     async def pause(self, ctx):
+#         await ctx.channel.purge(limit=1)  # удаление команды
+#         if not ctx.voice_client.is_paused():
+#             print('pause')
+#             await ctx.send('Paused ⏸')
+#             ctx.voice_client.pause()
+#
+#
+#     # resume->
+#     @commands.command()
+#     async def resume(self, ctx):
+#         await ctx.channel.purge(limit=1)  # удаление команды
+#         if ctx.voice_client.is_paused():
+#             print('resume')
+#             await ctx.send('Resume ▶')
+#             ctx.voice_client.resume()
