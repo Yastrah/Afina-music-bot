@@ -91,7 +91,7 @@ class Player(commands.Cog):
                 json.dump(data, file)
                 file.close()
 
-                return await ctx.send(f'*Играет плейлист **{song.split()[1].lower()}** * ')
+                return await ctx.send(f'*Играет плейлист **{song.split()[1].lower()}***')
             else:
                 return await ctx.send(f'*Плейлист **{song.split()[1].lower()}** __не найден__ ❌* ')
 
