@@ -56,7 +56,7 @@ class Player(commands.Cog):
         source = discord.FFmpegPCMAudio(url)
 
         ctx.voice_client.play(source, after=lambda error: self.client.loop.create_task(self.check_queue(ctx)))
-        ctx.voice_client.source.volume = 0.7
+        ctx.voice_client.source.volume = 0.5
 
     @commands.command(aliases=['p'])
     async def play(self, ctx, *, song=None):  # play->
@@ -66,7 +66,7 @@ class Player(commands.Cog):
             ctx.voice_client.resume()
 
         if song is None:
-            return await ctx.send('*Вы должны указать песню!*')
+            return await ctx.send('*Вы должны указать трек!*')
 
         file = open('Db.json', 'r')  # получение данных из Bd->
         data = json.loads(file.read())
@@ -97,19 +97,32 @@ class Player(commands.Cog):
 
         if not ('youtube.com/watch?' in song or 'https://youtu.be/' in song):  # поиск песни если это не url
             print('searching')
-            msg = await ctx.send('Поик песни...')
+            msg = await ctx.send('**Поик трека...**')
 
             info = await self.search_song(1, song)
             await msg.delete()  # Удаление сообщения 'поиск песни...'
 
             if info is None:
-                return await ctx.send('*Не удалось найти песню...*')
+                return await ctx.send('*Не удалось найти трек!*')
             song = info['entries'][0]['webpage_url']
-            await ctx.send(song)
+
+            seconds = info['entries'][0]['duration']
+            hour = seconds // 3600
+            seconds %= 3600
+            minutes = seconds // 60
+            seconds %= 60
+            if hour > 0:
+                duration = "%d:%02d:%02d" % (hour, minutes, seconds)
+            elif minutes > 0:
+                duration = "%02d:%02d" % (minutes, seconds)
+            else:
+                duration = "%02d" % seconds
+
+            await ctx.send(f'{song}  ({duration})')
 
         if ctx.voice_client.source is not None:
             if song in settings['queue']:
-                return await ctx.send('*Эта песня уже добавлена в очередь!*')
+                return await ctx.send('*Этот трек уже добавлен в очередь!*')
             else:
                 if len(settings['queue']) < 30:
                     settings['queue'].append(song)
@@ -117,9 +130,9 @@ class Player(commands.Cog):
                     file = open('Db.json', 'w')
                     json.dump(data, file)
                     file.close()
-                    return await ctx.send('*песня добавлена в очередь*')
+                    return await ctx.send('*Трек добавлен в очередь*')
                 else:
-                    return await ctx.send('*Уже добавлено слишком монго песен!*')
+                    return await ctx.send('*Уже добавлено слишком монго треков!*')
 
         settings['queue'].append(song)
 
@@ -151,13 +164,13 @@ class Player(commands.Cog):
             return await ctx.send('*❌ Вам запрещено использовать эту команду!*')
 
         if song is None:
-            return await ctx.send('Вы должны указать песню!')
+            return await ctx.send('**Вы должны указать трек!**')
 
-        wait = await ctx.send(f'поиск `{song}`')
+        wait = await ctx.send(f'**поиск** `{song}`')
 
         info = await self.search_song(5, song)
         if info is None:
-            return await ctx.send('Не удалось найти песни')
+            return await ctx.send('Не удалось найти трек')
 
         result = f'**Пожалуйста, выберите трек отправив число от 1 до 5:**\n'
         amount = 0
@@ -172,21 +185,20 @@ class Player(commands.Cog):
             minutes = seconds // 60
             seconds %= 60
             if hour > 0:
-                duration = "%dч %02dм %02dс" % (hour, minutes, seconds)
+                duration = "%d:%02d:%02d" % (hour, minutes, seconds)
             elif minutes > 0:
-                duration = "%02dм %02dс" % (minutes, seconds)
+                duration = "%02d:%02d" % (minutes, seconds)
             else:
-                duration = "%02dс" % seconds
-
+                duration = "%02d" % seconds
             result += f"**{amount}:** {entry['title']}\n({duration})\n"
 
         await wait.delete()
         await ctx.send(result)
 
-        try:
-            confirm = await self.client.wait_for("message", check=lambda m: m.author == ctx.author and m.channel == ctx.channel, timeout=15)
+        try:  # ожидание ответа
+            confirm = await self.client.wait_for("message", check=lambda m: m.author == ctx.author and m.channel == ctx.channel, timeout=30)
         except asyncio.TimeoutError:
-            return
+            return print('search-timeout')
 
         file = open('Db.json', 'r')  # получение данных из Bd->
         data = json.loads(file.read())
@@ -203,6 +215,9 @@ class Player(commands.Cog):
 
             await confirm.delete()
             await ctx.send(f'**Вы выбрали трек {confirm.content}:** {urls[0]}')
+
+            if ctx.voice_client.is_playig():
+                return
             await self.connect_voice(ctx)
             await self.play_song(ctx, urls[0])
 
@@ -216,6 +231,9 @@ class Player(commands.Cog):
 
             await confirm.delete()
             await ctx.send(f'**Вы выбрали трек {confirm.content}:** {urls[1]}')
+
+            if ctx.voice_client.is_playig():
+                return
             await self.connect_voice(ctx)
             await self.play_song(ctx, urls[1])
 
@@ -229,6 +247,9 @@ class Player(commands.Cog):
 
             await confirm.delete()
             await ctx.send(f'**Вы выбрали трек {confirm.content}:** {urls[2]}')
+
+            if ctx.voice_client.is_playig():
+                return
             await self.connect_voice(ctx)
             await self.play_song(ctx, urls[2])
 
@@ -242,6 +263,9 @@ class Player(commands.Cog):
 
             await confirm.delete()
             await ctx.send(f'**Вы выбрали трек {confirm.content}:** {urls[3]}')
+
+            if ctx.voice_client.is_playig():
+                return
             await self.connect_voice(ctx)
             await self.play_song(ctx, urls[3])
 
@@ -255,6 +279,9 @@ class Player(commands.Cog):
 
             await confirm.delete()
             await ctx.send(f'**Вы выбрали трек {confirm.content}:** {urls[4]}')
+
+            if ctx.voice_client.is_playig():
+                return
             await self.connect_voice(ctx)
             await self.play_song(ctx, urls[4])
 
@@ -285,21 +312,34 @@ class Player(commands.Cog):
         if len(settings['queue']) == 0:
             return await ctx.send('**Очередь треков пуста**')
 
+        wait = await ctx.send(f'**Обработка очереди....**')
+
         ydl_opts = {'format': 'bestaudio', 'queue': 'True', 'simulate': 'True', 'preferredquality': '192',
                     'preferredcodec': 'mp3', 'key': 'FFmpegExtractAudio'}
 
         queue_list = '**----Очередь треков----**\n'
 
-        #await ctx.send(f'**--Очередь треков:**')
         count = 0
         for song in settings['queue']:
             with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(song, download=False)
-            # print(info['title'])
             count += 1
-            #await ctx.send(f"**{count}:** {info['title']}")
-            queue_list += f"**{count}:** {info['title']}\n"
-        queue_list += '**----------------------------**'
+
+            seconds = info['duration']
+            hour = seconds // 3600
+            seconds %= 3600
+            minutes = seconds // 60
+            seconds %= 60
+            if hour > 0:
+                duration = "%d:%02d:%02d" % (hour, minutes, seconds)
+            elif minutes > 0:
+                duration = "%02d:%02d" % (minutes, seconds)
+            else:
+                duration = "%02d" % seconds
+
+            queue_list += f"**{count}:** {info['title']} \n    ({duration})\n"
+        queue_list += '**------------------------------**'
+        await wait.delete()
         await ctx.send(queue_list)
 
     @commands.command(aliases=['s'])
@@ -393,7 +433,7 @@ class Player(commands.Cog):
 
             lists = '**----Список плейлистов----**\n'
             for playlist in list(settings['playlists']):
-                lists += f'**{playlist}**\n'
+                lists += f'**{playlist}**  |  треков: **{len(playlist)}**\n'
             lists += '**----------------------------------**'
             return await ctx.send(lists)
 
@@ -544,7 +584,7 @@ class Player(commands.Cog):
         json.dump(data, file)
         file.close()
 
-        await ctx.send('*Текущая очередь будет **повторяться** 🔁*')
+        await ctx.send('*Текущая очередь **перестала повторяться***')
 
     @commands.command()
     async def pause(self, ctx):  # пауза->
@@ -566,11 +606,11 @@ class Player(commands.Cog):
             await ctx.send('*пауза* ⏸')
             ctx.voice_client.pause()
 
-        time = 0  # если бот стоит на паузе больше 10 мин то он покидает голосовой канал и чистит очередь
+        time = 0  # если бот стоит на паузе больше 5 мин то он покидает голосовой канал и чистит очередь
         while ctx.voice_client.is_paused():  # Checks if voice is playing
             await asyncio.sleep(1)
             time += 1
-            if time > 600:  # 10 мин
+            if time > 300:  # 5 мин
                 file = open('Db.json', 'r')
                 data = json.loads(file.read())
                 file.close()
@@ -651,11 +691,11 @@ class Player(commands.Cog):
                         print('auto-pause')
                         voice.pause()
 
-                        time = 0  # если бот стоит на паузе больше 5 мин то он покидает голосовой канал и чистит очередь
+                        time = 0  # если бот стоит на паузе больше 2 мин то он покидает голосовой канал и чистит очередь
                         while voice.is_paused():  # Checks if voice is playing
                             await asyncio.sleep(1)
                             time += 1
-                            if time > 300:  # 5 мин
+                            if time > 120:  # 2 мин
                                 file = open('Db.json', 'r')
                                 data = json.loads(file.read())
                                 file.close()
