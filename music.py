@@ -10,6 +10,8 @@ class Player(commands.Cog):
         self.client = client
 
     async def check_queue(self, ctx):  # проверка на наличие песен в очереди. Если есть то отправляет запрос в play_song
+        if ctx.voice_client is None:
+            return
         print('check_queue')
         file = open('Db.json', 'r')  # получение данных из Bd->
         data = json.loads(file.read())
@@ -25,8 +27,23 @@ class Player(commands.Cog):
             if len(settings['queue']) > 0:
                 ctx.voice_client.stop()
                 settings['queue'].pop(0)
-            if len(settings['queue']) > 0:
-                await self.play_song(ctx, settings['queue'][0])
+
+                if len(settings['queue']) > 0:
+                    await self.play_song(ctx, settings['queue'][0])
+
+                else:  # если треков больше не осталось
+                    time = 0  # если бот не играет больше 2 мин то он покидает голосовой канал и чистит очередь
+                    while not ctx.voice_client.is_playing():
+                        await asyncio.sleep(1)
+                        time += 1
+                        if time > 120:  # 2 мин
+                            settings['repeat'] = False
+                            file = open('Db.json', 'w')
+                            json.dump(data, file)
+
+                            print('auto-leave')
+                            await ctx.send('*Треков не осталось. Бот покинул голосовой канал.*')
+                            return await ctx.voice_client.disconnect()
 
         data[str(ctx.message.guild.id)] = settings  # Запись новых данных в Bd->
         file = open('Db.json', 'w')
@@ -60,6 +77,8 @@ class Player(commands.Cog):
 
     @commands.command(aliases=['p'])
     async def play(self, ctx, *, song=None):  # play->
+        if ctx.voice_client is None:
+            return
         print('play')
 
         if ctx.voice_client.is_paused():
@@ -154,12 +173,13 @@ class Player(commands.Cog):
             await ctx.send('*❌ Вам запрещено использовать эту команду!*')
             raise commands.CommandError("Author is muted.")
 
+        if ctx.author.voice is None:
+            return await ctx.send('*Вы не подключены к голосовому каналу!*')
+
         if ctx.voice_client is None:
-            if ctx.author.voice:
-                await ctx.author.voice.channel.connect()
-            else:
-                await ctx.send("Вы не подключены к голосовому каналу")
-                raise commands.CommandError("Author not connected to a voice channel.")
+            return await ctx.author.voice.channel.connect()
+        else:
+            return await ctx.voice_client.move_to(ctx.author.voice.channel)
 
     @commands.command(aliases=['find'])
     async def search(self, ctx, *, song=None):  # поиск песен по названию (5 вариантов)
@@ -566,6 +586,7 @@ class Player(commands.Cog):
             file.close()
             settings = data[str(ctx.message.guild.id)]  # settings содержит все настройки для этого сервера
 
+            count = len(settings['queue'])
             settings['queue'] = []
             settings['repeat'] = False
 
@@ -574,7 +595,8 @@ class Player(commands.Cog):
             json.dump(data, file)
             file.close()
 
-            return await ctx.voice_client.disconnect()
+            await ctx.voice_client.disconnect()
+            return await ctx.send(f'*Очередь была очищена, `{count}` треков было удалено.*')
 
     @commands.command(aliases=['rep'])
     async def repeat(self, ctx):  # очистка queue и отключение->
@@ -672,13 +694,14 @@ class Player(commands.Cog):
                     file = open('Db.json', 'r')
                     data = json.loads(file.read())
                     file.close()
+                    count = len(data[str(ctx.message.guild.id)]['queue'])
                     data[str(ctx.message.guild.id)]['queue'] = []
                     data[str(ctx.message.guild.id)]['repeat'] = False
                     file = open('Db.json', 'w')
                     json.dump(data, file)
 
                     print('auto-leave')
-                    await ctx.send('**Бот слишком долго стоял на паузе. Очередь была очищена**')
+                    await ctx.send(f'*Бот слишком долго стоял на паузе. Очередь была очищена, `{count}` треков было удалено.*')
                     return await ctx.voice_client.disconnect()
 
     @commands.command()
