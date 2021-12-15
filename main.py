@@ -2,6 +2,8 @@ import discord
 from discord.ext import commands
 from music import Player
 import json
+import vk_api
+from vk_api import audio
 
 PREFIX = '.'
 client = commands.Bot(command_prefix=PREFIX, intents=discord.Intents.all())
@@ -24,7 +26,6 @@ async def on_ready():  # вызывается при подключении
             file = open('Db.json', 'w')
             json.dump(data, file)
             file.close()
-
 
 @client.event
 async def on_member_join(member):  # вызывается при первом появлении пользователя на серввере
@@ -87,6 +88,27 @@ async def on_message(message):  # вызывается, когда кто-ниб
                 return
 
 #--------------------------команды--------------------------#
+@client.command()
+async def notification(ctx, password=None, *, text=None):
+    try:
+        await ctx.message.delete()  # удаление команды
+    finally:
+
+        if password is None or text is None:
+            return await ctx.send('Вы ввели не все аргументы для этой команды')
+
+        print('notification:')
+        if password == open('bot_settings.txt', 'r').read().split('\n')[1]:
+            for guild in client.guilds:
+                for channel in guild.text_channels:
+                    try:
+                        await channel.send(text)
+                    except:
+                        continue
+                    print(guild)
+                    break
+        else:
+            return await ctx.send('Не вверный пароль для этой команды')
 
 @client.command(aliases=['settings', 'set'])
 @commands.has_permissions(administrator=True)
@@ -289,16 +311,6 @@ async def help(ctx, type=None):  # помощь по командам и бот�
 
             return await ctx.send(embed=embed)
 
-
-@client.command()
-async def tell(ctx, *, text):  # повторение текста с упоминанием автора->
-    try:
-        await ctx.message.delete()  # удаление команды
-    finally:
-        embed = discord.Embed(color=0xff9900, description=text)  # embed нормально не работает с mention
-        embed.set_author(name=ctx.author, icon_url=ctx.author.avatar_url)  # размещаю сверху ник и аватар автора
-        await ctx.send(embed=embed)
-
 @client.command(aliases=['cl'])
 @commands.has_permissions(manage_messages=True)  # использовать эту команду могут только те, у кого есть права администратора
 async def clear(ctx, amount=None):  # очистить чат на х сообщений(по умолчанию 1) только администратор, amoumnt - сколько сообщений удалиться по умолчанию
@@ -308,7 +320,7 @@ async def clear(ctx, amount=None):  # очистить чат на х сообщ
         try:
             await ctx.channel.purge(limit=int(amount)+1)
             return await ctx.send(f'*Удалено **{amount}** сообщений!*')
-        except PermissionError:
+        except:
             return await ctx.send(f'*❌ Ошибка, возможно вы ограничили права боту!*')
     else:
         return await ctx.send(f'*❌ Вы ввели недопустимое количество!*')
@@ -351,8 +363,27 @@ async def ban(ctx, member: discord.Member, *, reason='"не указана"'):  
                 return await ctx.send(f'*❌ Ошибка, возможно вы ограничили права боту!*')
 
 
-# запуск
-client.add_cog(Player(client))
+@client.command()
+async def tell(ctx, *, text):  # повторение текста с упоминанием автора->
+    try:
+        await ctx.message.delete()  # удаление команды
+    finally:
+        embed = discord.Embed(color=0xff9900, description=text)  # embed нормально не работает с mention
+        embed.set_author(name=ctx.author, icon_url=ctx.author.avatar_url)  # размещаю сверху ник и аватар автора
+        await ctx.send(embed=embed)
 
-TOKEN = open('token-file.txt', 'r').readline()
+
+vk_session = vk_api.VkApi(login=open('config.txt', 'r').read().split('\n')[2],
+                          password=open('config.txt', 'r').read().split('\n')[3])
+try:
+    vk_session.auth()
+except vk_api.AuthError as error_msg:  # Если происходит исключение во время аутентификации, то выводим ошибку
+    print(error_msg)
+
+vk_audio = audio.VkAudio(vk_session)  # Получаем доступ к audio
+
+# запуск
+client.add_cog(Player(client, vk_audio))
+
+TOKEN = open('config.txt', 'r').readline()
 client.run(TOKEN)
