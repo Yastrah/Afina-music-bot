@@ -2,8 +2,8 @@ import discord
 from discord.ext import commands
 from music import Player
 import json
-import vk_api
-from vk_api import audio
+import asyncio
+
 
 PREFIX = '.'
 client = commands.Bot(command_prefix=PREFIX, intents=discord.Intents.all())
@@ -278,7 +278,8 @@ async def help(ctx, type=None):  # помощь по командам и бот�
                                                               '**list <имя плейлиста>**(в очередь будут добавлены треки из этого плейлиста)', inline=False)
             embed.add_field(name=f'`{PREFIX}stop (st)`', value='__Очищает очередь__. Бот покидает голосовой канал(отключается).', inline=False)
             embed.add_field(name=f'`{PREFIX}queue (q)`', value='Отображает текущую __очередь__.', inline=False)
-            embed.add_field(name=f'`{PREFIX}skip (s)`', value='__Пропуск__ текущего трека(можно настроить на голосование параметром settings **voteskip**).', inline=False)
+            embed.add_field(name=f'`{PREFIX}skip (s)`', value='__Пропуск__ текущего трека, если ничего не добавлять, то пропустится один трек, но можно указать **кол-во треков**.'
+                                                              ' (также можно настроить на голосование параметром settings **voteskip**).', inline=False)
             embed.add_field(name=f'`{PREFIX}repeat (rep)`', value='Очередь будет __повторяться__. '
                                                                   'После отключения от голосового канала функция автоматически отключается.', inline=False)
             embed.add_field(name=f'`{PREFIX}unrepeat (unrep)`', value='Если *repeat* включено, то вручную __отключает повторение__.', inline=False)
@@ -301,6 +302,11 @@ async def help(ctx, type=None):  # помощь по командам и бот�
             embed.add_field(name=f'`{PREFIX}clear (cl)`', value='Удаляет заданное число сообщений в чате (если не указано число, то 1). **Только для админов.**', inline=False)
             embed.add_field(name=f'`{PREFIX}kick`', value='Выгоняет указанного через **@** пользователя. Нужно иметь достаточные **права**!', inline=False)
             embed.add_field(name=f'`{PREFIX}ban`', value='Банит указанного через **@** пользователя. Нужно иметь достаточные **права**!', inline=False)
+            embed.add_field(name=f'`{PREFIX}vote`', value='Создаёт голосование, Парамерты: <время на голосование(__в секундах__)> '
+                                                          '<текст голосования> если указать текст в **одну строчку**, '
+                                                          'то голосование будет по **одному пунту** да/нет. Но можно сначала указать текст(название) голосование, '
+                                                          'а потом, используя **Shift+Enter** на каждой строчке указать пункт, '
+                                                          'то голосование будет за эти несколько пунктов, с возможностью выбирать несколько вариантов', inline=False)
 
             return await ctx.send(embed=embed)
 
@@ -359,8 +365,116 @@ async def ban(ctx, member: discord.Member, *, reason='"не указана"'):  
                 embed.set_author(name=str(member), icon_url=member.avatar_url)  # размещаю сверху ник и аватар пользователя, которого кикнули
                 embed.set_footer(text='Забанен админом {}'.format(ctx.author.name), icon_url=ctx.author.avatar_url)
                 await ctx.send(embed=embed)
-            except PermissionError:
+            except:
                 return await ctx.send(f'*❌ Ошибка, возможно вы ограничили права боту!*')
+
+@client.command()
+async def vote(ctx, time=None, *, text=None):  # голосование->
+    try:
+        await ctx.message.delete()  # удаление команды
+    finally:
+        if text is None:
+            return await ctx.send('*Вы не указали текст голосования!*')
+
+        if time is None or not time.isdigit():
+            time = 60
+
+        time = int(time)
+        if time > 7200:  # если больше 2 часов
+            return await ctx.send('*Время голосования не должно превышать 2 часа(7200 сек)!*')
+
+        print(f'time - {time}')
+        print(text.split('\n'))
+        text = text.split('\n')
+
+        if len(text) == 1:
+            embed = discord.Embed(title='Голосование',
+                                  description=text,
+                                  color=discord.Color.blue())
+            embed.set_author(name=ctx.author, icon_url=ctx.author.avatar_url)
+            embed.set_footer(text=f'Голосование завершится через {time} секунд!')
+
+            poll = await ctx.send(embed=embed)
+
+            await poll.add_reaction(u'\u2705')
+            await poll.add_reaction(u'\U0001F6AB')
+
+            await asyncio.sleep(time)  # ожидание окончания голосования
+            poll = await ctx.channel.fetch_message(poll.id)
+
+            votes = {u'\u2705': 0, u'\U0001F6AB': 0}
+            reacted = []
+
+            for reaction in poll.reactions:
+                if reaction.emoji in [u'\u2705', u'\U0001F6AB']:
+                    async for user in reaction.users():
+                        if user.id not in reacted and not user.bot:
+                            votes[reaction.emoji] += 1
+                            reacted.append(user.id)
+
+
+            if votes[u'\u2705'] == 0 and votes[u'\U0001F6AB'] == 0:
+                yes = 0
+                no = 0
+            elif votes[u'\u2705'] == 0:
+                yes = 0
+                no = 100
+            elif votes[u'\U0001F6AB'] == 0:
+                yes = 100
+                no = 0
+            else:
+                yes = (votes[u'\u2705'] / (votes[u'\u2705'] + votes[u'\U0001F6AB']))*100
+                no = (votes[u'\U0001F6AB'] / (votes[u'\u2705'] + votes[u'\U0001F6AB']))*100
+
+            embed = discord.Embed(title='Голосование завершено',
+                                  description=text,
+                                  color=discord.Color.green())
+            embed.set_author(name=ctx.author, icon_url=ctx.author.avatar_url)
+            embed.add_field(name='За', value=f":white_check_mark:\n {yes}%")
+            embed.add_field(name='Против', value=f":no_entry_sign:\n {no}%")
+
+
+            await poll.clear_reactions()
+            await poll.edit(embed=embed)
+
+        else:
+            poll = await ctx.send(f'**Голосование**\n*{text[0]}:*')  # заголовок голосование
+            points = []
+            count = 1
+
+            for point in text[1:]:  # цикл по пунктам голосования
+                points.append(await ctx.send(f'**{count}**: {point}'))
+                await points[-1].add_reaction(u'\u2705')
+                count += 1
+
+            await asyncio.sleep(time)  # ожидание окончания голосования
+
+            await poll.delete()  # удаляем заголовок
+            votes = []
+
+            for i in range(0, len(points)):
+                votes.append(0)
+                points[i] = await ctx.channel.fetch_message(points[i].id)
+
+                for reaction in points[i].reactions:
+                    if reaction.emoji == u'\u2705':
+                        async for user in reaction.users():
+                            if not user.bot:
+                                votes[i] += 1
+                        break
+
+                await points[i].delete()  # удаляем пункт
+
+            embed = discord.Embed(title='Голосование завершено',
+                                  description=text[0],
+                                  color=discord.Color.green())
+            embed.set_author(name=ctx.author, icon_url=ctx.author.avatar_url)
+
+            for i in range(0, len(points) - 1):
+                embed.add_field(name=text[i+1], value=f'`{votes[i]}`', inline=False)
+
+            return await ctx.send(embed=embed)
+
 
 
 @client.command()
@@ -368,22 +482,14 @@ async def tell(ctx, *, text):  # повторение текста с упоми
     try:
         await ctx.message.delete()  # удаление команды
     finally:
-        embed = discord.Embed(color=0xff9900, description=text)  # embed нормально не работает с mention
+        embed = discord.Embed(color=0xff9900, description=text)
         embed.set_author(name=ctx.author, icon_url=ctx.author.avatar_url)  # размещаю сверху ник и аватар автора
         await ctx.send(embed=embed)
 
 
-vk_session = vk_api.VkApi(login=open('config.txt', 'r').read().split('\n')[2],
-                          password=open('config.txt', 'r').read().split('\n')[3])
-try:
-    vk_session.auth()
-except vk_api.AuthError as error_msg:  # Если происходит исключение во время аутентификации, то выводим ошибку
-    print(error_msg)
-
-vk_audio = audio.VkAudio(vk_session)  # Получаем доступ к audio
 
 # запуск
-client.add_cog(Player(client, vk_audio))
+client.add_cog(Player(client))
 
 TOKEN = open('config.txt', 'r').readline()
 client.run(TOKEN)
