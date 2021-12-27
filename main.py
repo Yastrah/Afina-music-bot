@@ -470,7 +470,7 @@ async def vote(ctx, time=None, *, text=None):  # голосование->
                                   color=discord.Color.green())
             embed.set_author(name=ctx.author, icon_url=ctx.author.avatar_url)
 
-            for i in range(0, len(points) - 1):
+            for i in range(0, len(points)):
                 embed.add_field(name=text[i+1], value=f'`{votes[i]}`', inline=False)
 
             return await ctx.send(embed=embed)
