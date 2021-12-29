@@ -376,20 +376,21 @@ async def vote(ctx, time=None, *, text=None):  # голосование->
         if text is None:
             return await ctx.send('*Вы не указали текст голосования!*')
 
-        if time is None or not time.isdigit():
+        if time is None:
+            time = 60
+
+        if not time.isdigit():
+            text = time + ' ' + text
             time = 60
 
         time = int(time)
         if time > 7200:  # если больше 2 часов
             return await ctx.send('*Время голосования не должно превышать 2 часа(7200 сек)!*')
 
-        print(f'time - {time}')
-        print(text.split('\n'))
-        text = text.split('\n')
 
-        if len(text) == 1:
+        if len(text.split('\n')) == 1:
             embed = discord.Embed(title='Голосование',
-                                  description=text,
+                                  description=f'*{text}*',
                                   color=discord.Color.blue())
             embed.set_author(name=ctx.author, icon_url=ctx.author.avatar_url)
             embed.set_footer(text=f'Голосование завершится через {time} секунд!')
@@ -423,11 +424,11 @@ async def vote(ctx, time=None, *, text=None):  # голосование->
                 yes = 100
                 no = 0
             else:
-                yes = (votes[u'\u2705'] / (votes[u'\u2705'] + votes[u'\U0001F6AB']))*100
-                no = (votes[u'\U0001F6AB'] / (votes[u'\u2705'] + votes[u'\U0001F6AB']))*100
+                yes = int((votes[u'\u2705'] / (votes[u'\u2705'] + votes[u'\U0001F6AB']))*100)
+                no = int((votes[u'\U0001F6AB'] / (votes[u'\u2705'] + votes[u'\U0001F6AB']))*100)
 
             embed = discord.Embed(title='Голосование завершено',
-                                  description=text,
+                                  description=f'*{text}*',
                                   color=discord.Color.green())
             embed.set_author(name=ctx.author, icon_url=ctx.author.avatar_url)
             embed.add_field(name='За', value=f":white_check_mark:\n {yes}%")
@@ -438,6 +439,7 @@ async def vote(ctx, time=None, *, text=None):  # голосование->
             await poll.edit(embed=embed)
 
         else:
+            text = text.split('\n')
             poll = await ctx.send(f'**Голосование**\n*{text[0]}:*')  # заголовок голосование
             points = []
             count = 1
@@ -466,12 +468,12 @@ async def vote(ctx, time=None, *, text=None):  # голосование->
                 await points[i].delete()  # удаляем пункт
 
             embed = discord.Embed(title='Голосование завершено',
-                                  description=text[0],
+                                  description=f'*{text[0]}*',
                                   color=discord.Color.green())
             embed.set_author(name=ctx.author, icon_url=ctx.author.avatar_url)
 
             for i in range(0, len(points)):
-                embed.add_field(name=text[i+1], value=f'`{votes[i]}`', inline=False)
+                embed.add_field(name=f'*{text[i+1]}*', value=f'`{votes[i]}`', inline=False)
 
             return await ctx.send(embed=embed)
 
